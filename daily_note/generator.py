@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time
 import os
@@ -63,6 +64,13 @@ SKIP_SCAN_DIRS = {
     "dist",
     "node_modules",
     "venv",
+}
+
+NOTE_SECTION_HEADINGS = {
+    "work": "## 今日やったこと",
+    "learned": "## 学んだこと",
+    "blocked": "## 詰まったこと・相談したいこと",
+    "tomorrow": "## 明日やること",
 }
 
 
@@ -283,6 +291,67 @@ def render_daily_markdown(target_date: date, commits: list[Commit], branch: str 
         sections.extend(["", "## 関連チケット・ブランチ", *related_items])
 
     return "\n".join(sections).rstrip() + "\n"
+
+
+def append_daily_sections(note_path: Path, section_items: Mapping[str, Iterable[str]]) -> bool:
+    if not note_path.exists():
+        raise DailyNoteError(f"日報ファイルが見つかりません: {note_path}")
+
+    content = note_path.read_text(encoding="utf-8")
+    lines = content.splitlines()
+
+    for section_key, items in section_items.items():
+        heading = NOTE_SECTION_HEADINGS.get(section_key)
+        if heading is None:
+            raise DailyNoteError(f"未対応の日報項目です: {section_key}")
+        bullets = normalize_bullet_items(items)
+        if bullets:
+            lines = append_bullets_to_section(lines, heading, bullets)
+
+    new_content = "\n".join(lines).rstrip() + "\n"
+    if new_content == content:
+        return False
+
+    note_path.write_text(new_content, encoding="utf-8")
+    return True
+
+
+def normalize_bullet_items(items: Iterable[str]) -> list[str]:
+    bullets: list[str] = []
+    for item in items:
+        for raw_line in item.splitlines():
+            line = raw_line.strip()
+            if line.startswith("- "):
+                line = line[2:].strip()
+            if line and line != "-":
+                bullets.append(line)
+    return bullets
+
+
+def append_bullets_to_section(lines: list[str], heading: str, bullets: list[str]) -> list[str]:
+    heading_index = next((index for index, line in enumerate(lines) if line.strip() == heading), None)
+    bullet_lines = [f"- {bullet}" for bullet in bullets]
+
+    if heading_index is None:
+        new_lines = list(lines)
+        if new_lines and new_lines[-1].strip():
+            new_lines.append("")
+        new_lines.extend([heading, *bullet_lines])
+        return new_lines
+
+    section_end = len(lines)
+    for index in range(heading_index + 1, len(lines)):
+        if lines[index].startswith("## "):
+            section_end = index
+            break
+
+    section_lines = [line for line in lines[heading_index + 1 : section_end] if line.strip() != "-"]
+    insert_at = len(section_lines)
+    while insert_at > 0 and not section_lines[insert_at - 1].strip():
+        insert_at -= 1
+
+    new_section_lines = section_lines[:insert_at] + bullet_lines + section_lines[insert_at:]
+    return lines[: heading_index + 1] + new_section_lines + lines[section_end:]
 
 
 def render_workspace_work_items(activities: list[RepoActivity]) -> list[str]:

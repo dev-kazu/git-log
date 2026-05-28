@@ -10,6 +10,7 @@ import unittest
 from daily_note.generator import (
     Commit,
     DailyNoteError,
+    append_daily_sections,
     classify_file,
     first_bullet_after,
     find_git_repos,
@@ -17,6 +18,7 @@ from daily_note.generator import (
     generate_workspace_note,
     parse_git_log,
     render_daily_markdown,
+    update_month_index,
 )
 
 
@@ -95,6 +97,49 @@ class GeneratorTest(unittest.TestCase):
         self.assertIn("## 学んだこと\n- ", markdown)
         self.assertIn("- ブランチ: `main`", markdown)
 
+    def test_append_daily_sections_replaces_empty_placeholders_and_updates_index(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "daily"
+            output_dir.mkdir()
+            target = date(2026, 5, 27)
+            daily_path = output_dir / "2026-05-27.md"
+            daily_path.write_text(render_daily_markdown(target, [], "main"), encoding="utf-8")
+
+            changed = append_daily_sections(
+                daily_path,
+                {
+                    "learned": ["argparse でCLI入力を扱った"],
+                    "blocked": ["特になし"],
+                    "tomorrow": ["README に使い方を書く"],
+                },
+            )
+            update_month_index(output_dir, target)
+
+            self.assertTrue(changed)
+            daily = daily_path.read_text(encoding="utf-8")
+            self.assertIn("## 学んだこと\n- argparse でCLI入力を扱った\n", daily)
+            self.assertIn("## 詰まったこと・相談したいこと\n- 特になし\n", daily)
+            self.assertIn("## 明日やること\n- README に使い方を書く\n", daily)
+            self.assertNotIn("## 学んだこと\n- \n", daily)
+
+            index = (output_dir / "2026-05.md").read_text(encoding="utf-8")
+            self.assertIn("- 学んだこと: argparse でCLI入力を扱った", index)
+            self.assertIn("- 詰まったこと: 特になし", index)
+
+    def test_append_daily_sections_appends_to_existing_items(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            daily_path = Path(directory) / "2026-05-27.md"
+            daily_path.write_text(
+                "# 日報 2026-05-27\n\n## 学んだこと\n- 既存\n\n## 明日やること\n- \n",
+                encoding="utf-8",
+            )
+
+            append_daily_sections(daily_path, {"learned": ["追加"], "tomorrow": ["次の作業"]})
+
+            daily = daily_path.read_text(encoding="utf-8")
+            self.assertIn("## 学んだこと\n- 既存\n- 追加\n\n## 明日やること", daily)
+            self.assertIn("## 明日やること\n- 次の作業\n", daily)
+
     def test_first_bullet_after_ignores_empty_placeholder(self) -> None:
         content = "## 学んだこと\n- \n\n## 詰まったこと・相談したいこと\n- review flow\n"
 
@@ -153,7 +198,6 @@ class GeneratorTest(unittest.TestCase):
 
             daily = result.path.read_text(encoding="utf-8")
             self.assertIn("- 本日のGitコミットはありません。", daily)
-
 
     def test_find_git_repos_discovers_multiple_repositories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

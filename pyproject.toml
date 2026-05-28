@@ -3,3 +3,7 @@ name = "daily-note"
 version = "0.1.0"
 description = "Generate daily Markdown work notes from git log."
 requires-python = ">=3.10"
+
+[project.scripts]
+daily-note = "daily_note.cli:main"
+gitlog = "daily_note.cli:main"
