@@ -3,14 +3,37 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 from datetime import date
 import io
+import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
-from daily_note.cli import build_parser, parse_args, prompt_section_items, section_items_from_args, should_prompt_for_manual_entries
+from daily_note.cli import (
+    build_parser,
+    default_output_dir,
+    main,
+    parse_args,
+    prompt_section_items,
+    section_items_from_args,
+    should_prompt_for_manual_entries,
+)
+from daily_note.generator import DailyNote
 
 
 class CliTest(unittest.TestCase):
+    def test_default_output_dir_uses_app_data_directory(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch("daily_note.cli.Path.home", return_value=Path("/home/test")):
+            self.assertEqual(default_output_dir(), Path("/home/test/.local/share/daily-note"))
+
+    def test_default_output_dir_can_be_configured_with_env(self) -> None:
+        with patch.dict(os.environ, {"DAILY_NOTE_DIR": "/tmp/daily-notes"}, clear=True):
+            self.assertEqual(default_output_dir(), Path("/tmp/daily-notes"))
+
+    def test_default_output_dir_uses_xdg_data_home(self) -> None:
+        with patch.dict(os.environ, {"XDG_DATA_HOME": "/tmp/xdg-data"}, clear=True):
+            self.assertEqual(default_output_dir(), Path("/tmp/xdg-data/daily-note"))
+
     def test_short_options_for_single_repo_mode(self) -> None:
         args = build_parser().parse_args(["-d", "2026-05-27", "-r", "repo", "-o", "notes", "-f"])
 
@@ -112,6 +135,33 @@ class CliTest(unittest.TestCase):
         self.assertEqual(items["learned"], ["学び"])
         self.assertEqual(items["blocked"], [])
         self.assertEqual(items["tomorrow"], ["明日1"])
+
+    def test_main_displays_note_preview_before_interactive_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "daily"
+            output_dir.mkdir()
+            note_path = output_dir / "2026-05-28.md"
+            note_path.write_text("# 日報 2026-05-28\n\n## 今日やったこと\n- 実装: add preview\n", encoding="utf-8")
+            result = DailyNote(path=note_path, index_path=output_dir / "2026-05.md", created=True, index_updated=True)
+
+            def prompt() -> dict[str, list[str]]:
+                print("PROMPT START")
+                return {}
+
+            with (
+                patch("daily_note.cli.generate_note", return_value=result),
+                patch("daily_note.cli.sys.stdin") as stdin,
+                patch("daily_note.cli.prompt_section_items", side_effect=prompt),
+                redirect_stdout(io.StringIO()) as stdout,
+            ):
+                stdin.isatty.return_value = True
+                exit_code = main(["--date", "2026-05-28", "--repo", "repo", "--dir", str(output_dir)])
+
+            output = stdout.getvalue()
+            self.assertEqual(exit_code, 0)
+            self.assertIn("=== git log まとめ ===", output)
+            self.assertIn("- 実装: add preview", output)
+            self.assertLess(output.index("=== git log まとめ ==="), output.index("PROMPT START"))
 
     def test_natural_request_for_workspace_mode(self) -> None:
         args = parse_args(["--repo", "workspace", "全体の日報"], today=date(2026, 5, 28))

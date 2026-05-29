@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date, timedelta
+import os
 from pathlib import Path
 import re
 import sys
@@ -26,6 +27,20 @@ SECTION_PROMPTS = (
     ("blocked", "詰まったこと・相談したいこと"),
     ("tomorrow", "明日やること"),
 )
+OUTPUT_DIR_ENV = "DAILY_NOTE_DIR"
+DEFAULT_OUTPUT_DIR = Path(".local/share/daily-note")
+
+
+def default_output_dir() -> Path:
+    configured_dir = os.environ.get(OUTPUT_DIR_ENV)
+    if configured_dir:
+        return Path(configured_dir).expanduser()
+
+    data_home = os.environ.get("XDG_DATA_HOME")
+    if data_home:
+        return Path(data_home).expanduser() / "daily-note"
+
+    return Path.home() / DEFAULT_OUTPUT_DIR
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,8 +54,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         dest="output_dir",
         type=Path,
-        default=Path("daily"),
-        help="Output directory. In repo mode, relative paths are created under the repo. In workspace mode, relative paths are created from the current directory.",
+        default=default_output_dir(),
+        help=(
+            "Output directory. Defaults to DAILY_NOTE_DIR or ~/.local/share/daily-note. "
+            "In repo mode, explicit relative paths are created under the repo. "
+            "In workspace mode, explicit relative paths are created from the current directory."
+        ),
     )
     parser.add_argument("-a", "--author-email", help="Author email to use when scanning a workspace. Defaults to each repository's git config user.email.")
     parser.add_argument("-f", "--force", action="store_true", help="Overwrite an existing daily note.")
@@ -119,6 +138,15 @@ def prompt_section_items() -> dict[str, list[str]]:
     return items
 
 
+def print_note_preview(note_path: Path) -> None:
+    content = note_path.read_text(encoding="utf-8").rstrip()
+    print()
+    print("=== git log まとめ ===")
+    print(content)
+    print("=== ここまで ===")
+    print()
+
+
 def merge_section_items(base: dict[str, list[str]], extra: dict[str, list[str]]) -> None:
     for section_key, items in extra.items():
         base.setdefault(section_key, []).extend(items)
@@ -157,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
 
         section_items = section_items_from_args(args)
         if should_prompt_for_manual_entries(args, section_items):
+            print_note_preview(result.path)
             merge_section_items(section_items, prompt_section_items())
         if has_section_items(section_items):
             manual_updated = append_daily_sections(result.path, section_items)
