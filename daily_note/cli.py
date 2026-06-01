@@ -7,7 +7,14 @@ from pathlib import Path
 import re
 import sys
 
-from .generator import DailyNoteError, append_daily_sections, generate_note, generate_workspace_note, update_month_index
+from .generator import (
+    DailyNoteError,
+    append_daily_sections,
+    generate_note,
+    generate_workspace_note,
+    update_month_index,
+    update_year_workbook,
+)
 
 DATE_PATTERN = re.compile(r"\d{4}[-/]\d{2}[-/]\d{2}")
 RELATIVE_DATE_TERMS = (
@@ -29,6 +36,7 @@ SECTION_PROMPTS = (
 )
 OUTPUT_DIR_ENV = "DAILY_NOTE_DIR"
 DEFAULT_OUTPUT_DIR = Path(".local/share/daily-note")
+PROMPT_LINE_EDITING_CONFIGURED = False
 
 
 def default_output_dir() -> Path:
@@ -120,7 +128,20 @@ def section_items_from_args(args: argparse.Namespace) -> dict[str, list[str]]:
     }
 
 
+def enable_prompt_line_editing() -> None:
+    global PROMPT_LINE_EDITING_CONFIGURED
+    if PROMPT_LINE_EDITING_CONFIGURED or not sys.stdin.isatty():
+        return
+
+    PROMPT_LINE_EDITING_CONFIGURED = True
+    try:
+        import readline  # noqa: F401
+    except ImportError:
+        return
+
+
 def prompt_section_items() -> dict[str, list[str]]:
+    enable_prompt_line_editing()
     print("日報に追記する内容を入力してください。")
     print("各項目は1行ずつ入力し、空行で次の項目へ進みます。何も入力しない項目はスキップします。")
     items = {section_key: [] for section_key, _ in SECTION_PROMPTS}
@@ -191,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
             manual_updated = append_daily_sections(result.path, section_items)
             if manual_updated:
                 update_month_index(result.path.parent, args.target_date)
+                update_year_workbook(result.path.parent, args.target_date)
     except DailyNoteError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -203,4 +225,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"updated daily note: {result.path}")
     if result.index_updated:
         print(f"updated: {result.index_path}")
+    if result.workbook_updated and result.workbook_path:
+        print(f"updated: {result.workbook_path}")
     return 0

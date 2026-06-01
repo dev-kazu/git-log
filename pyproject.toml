@@ -3,6 +3,9 @@ name = "daily-note"
 version = "0.1.0"
 description = "Generate daily Markdown work notes from git log."
 requires-python = ">=3.10"
+dependencies = [
+    "openpyxl>=3.1,<4",
+]
 
 [project.scripts]
 daily-note = "daily_note.cli:main"

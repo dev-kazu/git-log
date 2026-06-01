@@ -29,6 +29,8 @@ class DailyNote:
     index_path: Path
     created: bool
     index_updated: bool
+    workbook_path: Path | None = None
+    workbook_updated: bool = False
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,25 @@ NOTE_SECTION_HEADINGS = {
     "tomorrow": "## 明日やること",
 }
 
+WORKBOOK_HEADERS = (
+    "日付",
+    "やったこと",
+    "学んだこと",
+    "詰まったこと・相談したいこと",
+    "明日やること",
+    "変更した主な領域",
+    "関連チケット・ブランチ",
+    "日報Markdownパス",
+)
+WORKBOOK_SECTION_HEADINGS = {
+    "work": "## 今日やったこと",
+    "learned": "## 学んだこと",
+    "blocked": "## 詰まったこと・相談したいこと",
+    "tomorrow": "## 明日やること",
+    "areas": "## 変更した主な領域",
+    "related": "## 関連チケット・ブランチ",
+}
+
 
 def generate_note(
     repo: Path,
@@ -107,7 +128,15 @@ def generate_note(
         created = True
 
     update_month_index(output_dir, target_date)
-    return DailyNote(path=note_path, index_path=index_path, created=created, index_updated=True)
+    workbook_path = update_year_workbook(output_dir, target_date)
+    return DailyNote(
+        path=note_path,
+        index_path=index_path,
+        created=created,
+        index_updated=True,
+        workbook_path=workbook_path,
+        workbook_updated=True,
+    )
 
 
 def generate_workspace_note(
@@ -153,7 +182,15 @@ def generate_workspace_note(
         created = True
 
     update_month_index(output_dir, target_date)
-    return DailyNote(path=note_path, index_path=index_path, created=created, index_updated=True)
+    workbook_path = update_year_workbook(output_dir, target_date)
+    return DailyNote(
+        path=note_path,
+        index_path=index_path,
+        created=created,
+        index_updated=True,
+        workbook_path=workbook_path,
+        workbook_updated=True,
+    )
 
 
 def find_git_repos(workspace: Path) -> list[Path]:
@@ -491,6 +528,152 @@ def repo_name(repo: Path, workspace: Path) -> str:
         return repo.relative_to(workspace).as_posix() or repo.name
     except ValueError:
         return repo.name
+
+
+def update_year_workbook(output_dir: Path, target_date: date) -> Path:
+    try:
+        from openpyxl import Workbook, load_workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+    except ImportError as exc:
+        raise DailyNoteError("Excel出力には openpyxl が必要です。依存関係をインストールしてください。") from exc
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    workbook_path = output_dir / f"{target_date:%Y}.xlsx"
+    if workbook_path.exists():
+        workbook = load_workbook(workbook_path)
+    else:
+        workbook = Workbook()
+
+    ensure_month_sheets(workbook)
+    records = read_year_daily_records(output_dir, target_date.year)
+    records_by_month: dict[int, list[tuple[date, tuple[str, ...]]]] = {month: [] for month in range(1, 13)}
+    for record_date, values in records:
+        records_by_month[record_date.month].append((record_date, values))
+
+    for month in range(1, 13):
+        sheet = workbook[month_sheet_name(month)]
+        write_month_sheet(
+            sheet,
+            records_by_month[month],
+            alignment_cls=Alignment,
+            font_cls=Font,
+            fill_cls=PatternFill,
+            get_column_letter=get_column_letter,
+        )
+
+    try:
+        workbook.save(workbook_path)
+    except OSError as exc:
+        raise DailyNoteError(f"Excelブックを保存できません: {workbook_path}") from exc
+    return workbook_path
+
+
+def month_sheet_name(month: int) -> str:
+    return f"{month:02d}月"
+
+
+def ensure_month_sheets(workbook) -> None:
+    month_names = [month_sheet_name(month) for month in range(1, 13)]
+    if workbook.sheetnames == ["Sheet"]:
+        workbook["Sheet"].title = month_names[0]
+
+    for name in month_names:
+        if name not in workbook.sheetnames:
+            workbook.create_sheet(title=name)
+
+    if "Sheet" in workbook.sheetnames and is_empty_sheet(workbook["Sheet"]):
+        workbook.remove(workbook["Sheet"])
+
+
+def is_empty_sheet(sheet) -> bool:
+    return sheet.max_row == 1 and sheet.max_column == 1 and sheet["A1"].value is None
+
+
+def read_year_daily_records(output_dir: Path, year: int) -> list[tuple[date, tuple[str, ...]]]:
+    records: list[tuple[date, tuple[str, ...]]] = []
+    for daily_file in sorted(output_dir.glob(f"{year}-??-??.md")):
+        try:
+            record_date = date.fromisoformat(daily_file.stem)
+        except ValueError:
+            continue
+        if record_date.year != year:
+            continue
+        content = daily_file.read_text(encoding="utf-8")
+        records.append((record_date, daily_workbook_row(record_date, daily_file, content)))
+    return records
+
+
+def daily_workbook_row(record_date: date, daily_file: Path, content: str) -> tuple[str, ...]:
+    return (
+        record_date.isoformat(),
+        workbook_section_text(content, "work"),
+        workbook_section_text(content, "learned"),
+        workbook_section_text(content, "blocked"),
+        workbook_section_text(content, "tomorrow"),
+        workbook_section_text(content, "areas"),
+        workbook_section_text(content, "related"),
+        daily_file.as_posix(),
+    )
+
+
+def workbook_section_text(content: str, section_key: str) -> str:
+    heading = WORKBOOK_SECTION_HEADINGS[section_key]
+    return "\n".join(section_bullets_after(content, heading))
+
+
+def section_bullets_after(content: str, heading: str) -> list[str]:
+    bullets: list[str] = []
+    in_section = False
+    for line in content.splitlines():
+        if line.startswith("## "):
+            if in_section:
+                break
+            in_section = line.strip() == heading
+            continue
+        if not in_section:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            value = stripped[2:].strip()
+            if value:
+                bullets.append(value)
+    return bullets
+
+
+def write_month_sheet(
+    sheet,
+    records: list[tuple[date, tuple[str, ...]]],
+    *,
+    alignment_cls,
+    font_cls,
+    fill_cls,
+    get_column_letter,
+) -> None:
+    header_font = font_cls(bold=True, color="FFFFFF")
+    header_fill = fill_cls(fill_type="solid", fgColor="4F81BD")
+    wrap_alignment = alignment_cls(wrap_text=True, vertical="top")
+    header_alignment = alignment_cls(wrap_text=True, vertical="center")
+    column_widths = (14, 36, 32, 32, 32, 32, 36, 48)
+
+    for column_index, header in enumerate(WORKBOOK_HEADERS, start=1):
+        cell = sheet.cell(row=1, column=column_index, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        sheet.column_dimensions[get_column_letter(column_index)].width = column_widths[column_index - 1]
+
+    if sheet.max_row > 1:
+        sheet.delete_rows(2, sheet.max_row - 1)
+
+    for row_index, (_, values) in enumerate(sorted(records, key=lambda item: item[0]), start=2):
+        for column_index, value in enumerate(values, start=1):
+            cell = sheet.cell(row=row_index, column=column_index, value=value)
+            cell.alignment = wrap_alignment
+        sheet.row_dimensions[row_index].height = 45
+
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(WORKBOOK_HEADERS))}1"
 
 
 def update_month_index(output_dir: Path, target_date: date) -> None:

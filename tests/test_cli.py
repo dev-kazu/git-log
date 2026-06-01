@@ -12,6 +12,7 @@ from unittest.mock import patch
 from daily_note.cli import (
     build_parser,
     default_output_dir,
+    enable_prompt_line_editing,
     main,
     parse_args,
     prompt_section_items,
@@ -125,6 +126,26 @@ class CliTest(unittest.TestCase):
             stdin.isatty.return_value = True
             self.assertFalse(should_prompt_for_manual_entries(args, section_items))
 
+    def test_prompt_line_editing_imports_readline_for_tty(self) -> None:
+        imported: list[str] = []
+        real_import = __import__
+
+        def fake_import(name: str, globals=None, locals=None, fromlist=(), level: int = 0):
+            if name == "readline":
+                imported.append(name)
+                raise ImportError("readline unavailable")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with (
+            patch("daily_note.cli.PROMPT_LINE_EDITING_CONFIGURED", False),
+            patch("daily_note.cli.sys.stdin") as stdin,
+            patch("builtins.__import__", side_effect=fake_import),
+        ):
+            stdin.isatty.return_value = True
+            enable_prompt_line_editing()
+
+        self.assertEqual(imported, ["readline"])
+
     def test_prompt_section_items_accepts_multiple_lines_per_section(self) -> None:
         inputs = ["作業1", "作業2", "", "学び", "", "", "明日1", ""]
 
@@ -162,6 +183,32 @@ class CliTest(unittest.TestCase):
             self.assertIn("=== git log まとめ ===", output)
             self.assertIn("- 実装: add preview", output)
             self.assertLess(output.index("=== git log まとめ ==="), output.index("PROMPT START"))
+
+    def test_main_prints_workbook_update_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "daily"
+            output_dir.mkdir()
+            note_path = output_dir / "2026-05-28.md"
+            note_path.write_text("# 日報 2026-05-28\n", encoding="utf-8")
+            result = DailyNote(
+                path=note_path,
+                index_path=output_dir / "2026-05.md",
+                created=True,
+                index_updated=True,
+                workbook_path=output_dir / "2026.xlsx",
+                workbook_updated=True,
+            )
+
+            with (
+                patch("daily_note.cli.generate_note", return_value=result),
+                patch("daily_note.cli.sys.stdin") as stdin,
+                redirect_stdout(io.StringIO()) as stdout,
+            ):
+                stdin.isatty.return_value = False
+                exit_code = main(["--date", "2026-05-28", "--repo", "repo", "--dir", str(output_dir)])
+
+            self.assertEqual(exit_code, 0)
+            self.assertIn(f"updated: {output_dir / '2026.xlsx'}", stdout.getvalue())
 
     def test_natural_request_for_workspace_mode(self) -> None:
         args = parse_args(["--repo", "workspace", "全体の日報"], today=date(2026, 5, 28))

@@ -19,6 +19,7 @@ from daily_note.generator import (
     parse_git_log,
     render_daily_markdown,
     update_month_index,
+    update_year_workbook,
 )
 
 
@@ -172,6 +173,56 @@ class GeneratorTest(unittest.TestCase):
             self.assertIn("- [日報を見る](./2026-05-27.md)", index)
             self.assertIn("- やったこと: 実装: add daily report", index)
 
+    def test_generate_note_creates_year_workbook_with_month_sheets(self) -> None:
+        from openpyxl import load_workbook
+
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            init_repo(repo)
+            run(["git", "checkout", "-b", "feature/ABC-123-report"], repo)
+            commit_file(repo, "daily_note/app.py", "print('hi')\n", "feat: add daily report", "2026-05-27")
+            commit_file(repo, "tests/test_app.py", "def test_app(): pass\n", "test: cover report", "2026-05-27")
+
+            result = generate_note(repo, date(2026, 5, 27), tmp_path / "daily")
+
+            self.assertTrue(result.workbook_updated)
+            self.assertEqual(result.workbook_path, tmp_path / "daily" / "2026.xlsx")
+            workbook = load_workbook(result.workbook_path)
+            self.assertEqual(workbook.sheetnames, [f"{month:02d}月" for month in range(1, 13)])
+            sheet = workbook["05月"]
+            self.assertEqual(sheet.cell(row=2, column=1).value, "2026-05-27")
+            self.assertIn("実装: add daily report", sheet.cell(row=2, column=2).value)
+            self.assertIn("テスト: cover report", sheet.cell(row=2, column=2).value)
+            self.assertIn("実装", sheet.cell(row=2, column=6).value)
+            self.assertIn("テスト", sheet.cell(row=2, column=6).value)
+            self.assertIn("feature/ABC-123-report", sheet.cell(row=2, column=7).value)
+            self.assertEqual(sheet.cell(row=2, column=8).value, (tmp_path / "daily" / "2026-05-27.md").as_posix())
+
+    def test_update_year_workbook_refreshes_existing_day_row(self) -> None:
+        from openpyxl import load_workbook
+
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "daily"
+            output_dir.mkdir()
+            target = date(2026, 5, 27)
+            daily_path = output_dir / "2026-05-27.md"
+            daily_path.write_text(render_daily_markdown(target, [], "main"), encoding="utf-8")
+
+            update_year_workbook(output_dir, target)
+            append_daily_sections(daily_path, {"learned": ["初回の学び"], "tomorrow": ["次の作業"]})
+            update_year_workbook(output_dir, target)
+            append_daily_sections(daily_path, {"learned": ["追加の学び"]})
+            update_year_workbook(output_dir, target)
+
+            workbook = load_workbook(output_dir / "2026.xlsx")
+            sheet = workbook["05月"]
+            self.assertEqual(sheet.max_row, 2)
+            self.assertEqual(sheet.cell(row=2, column=1).value, "2026-05-27")
+            self.assertEqual(sheet.cell(row=2, column=3).value, "初回の学び\n追加の学び")
+            self.assertEqual(sheet.cell(row=2, column=5).value, "次の作業")
+
     def test_generate_note_filters_to_configured_author(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tmp_path = Path(directory)
@@ -245,6 +296,13 @@ class GeneratorTest(unittest.TestCase):
 
             index = result.index_path.read_text(encoding="utf-8")
             self.assertIn("- やったこと: `app-one`: 実装: add API", index)
+
+            from openpyxl import load_workbook
+
+            workbook = load_workbook(result.workbook_path)
+            sheet = workbook["05月"]
+            self.assertIn("`app-one`: 実装: add API", sheet.cell(row=2, column=2).value)
+            self.assertIn("`app-two`: ドキュメント: update setup", sheet.cell(row=2, column=2).value)
 
     def test_generate_workspace_note_errors_without_repositories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
