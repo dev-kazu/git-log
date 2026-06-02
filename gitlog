@@ -1,4 +1,9 @@
 #!/usr/bin/env sh
 set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-PYTHONPATH="$SCRIPT_DIR${PYTHONPATH+:$PYTHONPATH}" exec python3 -m daily_note "$@"
+if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
+    PYTHON="$SCRIPT_DIR/.venv/bin/python"
+else
+    PYTHON=python3
+fi
+PYTHONPATH="$SCRIPT_DIR${PYTHONPATH+:$PYTHONPATH}" exec "$PYTHON" -m daily_note "$@"

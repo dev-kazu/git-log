@@ -7,6 +7,9 @@ dependencies = [
     "openpyxl>=3.1,<4",
 ]
 
+[tool.setuptools]
+packages = ["daily_note"]
+
 [project.scripts]
 daily-note = "daily_note.cli:main"
 gitlog = "daily_note.cli:main"
